@@ -1,0 +1,1 @@
+File ini merupakan dummy project untuk mata kuliah proyuek konsentrasi elektronika, saya memilih topik ini karena topik ini adalah hal yang paling simple untuk mencoba komunikasi ESP dengan menggunakan protokol komunikasi ESPNOW dua arah.
