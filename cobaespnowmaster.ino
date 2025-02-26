@@ -6,6 +6,7 @@
 #define AMP_LRCLK 25    // LRCLK
 #define AMP_DATA  22    // Data Out
 #define BOOT_BUTTON 0   // Tombol BOOT bawaan ESP32
+#define MUTE_BUTTON 33  // Tombol untuk menonaktifkan speaker
 
 // MAC Address Slave (ubah sesuai dengan unit Slave Anda)
 uint8_t peerAddress[] = {0xCC, 0xDB, 0xA7, 0x94, 0x85, 0x50};
@@ -21,6 +22,7 @@ Message rxMessage;
 bool readyToSend = true;     
 bool buttonTriggered = false; // untuk mencegah trigger berulang selama tombol ditekan
 bool busy = false;            // indikator unit sedang memproses
+bool speakerEnabled = true;   // Flag untuk status speaker
 
 // Inisialisasi I2S untuk menghasilkan tone
 void i2sInit() {
@@ -51,18 +53,20 @@ void i2sInit() {
 
 // Fungsi untuk menghasilkan tone melalui I2S
 void generateTone(int freq, int duration_ms) {
+  if (!speakerEnabled) return; // Jika speaker dimatikan, jangan memutar suara
+
   const int sampleRate = 44100;
   const int amplitude = 3000;
   int numSamples = sampleRate / freq;
   int16_t samples[numSamples];
-  
+
   for (int i = 0; i < numSamples; i++) {
     samples[i] = amplitude * sin(2.0 * PI * freq * i / sampleRate);
   }
-  
+
   size_t bytes_written;
   unsigned long startTime = millis();
-  while(millis() - startTime < duration_ms) {
+  while (millis() - startTime < duration_ms) {
     i2s_write(I2S_NUM_0, samples, numSamples * sizeof(int16_t), &bytes_written, portMAX_DELAY);
   }
 }
@@ -72,14 +76,18 @@ void onDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *data, int l
   memcpy(&rxMessage, data, sizeof(rxMessage));
   Serial.print("Received Frequency: ");
   Serial.println(rxMessage.frequency);
-  
+
   busy = true;
-  // Jika menerima pesan 2000 Hz, mainkan tone tersebut
+  
   if (rxMessage.frequency == 2000) {
-    generateTone(rxMessage.frequency, 1000); // Putar 2kHz selama 1 detik
-    Serial.println("2kHz received and played");
-    // Tidak mengaktifkan kembali readyToSend, sehingga Master tidak dapat mengirim lagi.
+    if (speakerEnabled) {  // Hanya putar suara jika speaker aktif
+      generateTone(rxMessage.frequency, 1000);
+      Serial.println("Playing 2kHz from Slave");
+    } else {
+      Serial.println("Speaker is disabled, not playing sound");
+    }
   }
+  
   busy = false;
 }
 
@@ -88,6 +96,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
 
   pinMode(BOOT_BUTTON, INPUT_PULLUP);
+  pinMode(MUTE_BUTTON, INPUT_PULLUP);
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW Init Failed");
@@ -109,12 +118,24 @@ void setup() {
 
 void loop() {
   bool buttonState = digitalRead(BOOT_BUTTON);
+  bool muteState = digitalRead(MUTE_BUTTON);
+
+  // Toggle status speaker jika tombol mute ditekan
+  if (muteState == LOW) {
+    delay(200);
+    if (digitalRead(MUTE_BUTTON) == LOW) {
+      speakerEnabled = !speakerEnabled;
+      Serial.println(speakerEnabled ? "Speaker Enabled" : "Speaker Disabled");
+      delay(300);
+      while (digitalRead(MUTE_BUTTON) == LOW); // Tunggu sampai tombol dilepas
+    }
+  }
 
   // Kirim data hanya jika unit siap (readyToSend true), belum trigger, tidak sibuk, dan tombol ditekan
   if (readyToSend && !buttonTriggered && !busy && buttonState == LOW) {
     delay(50);  // Debounce
     if (digitalRead(BOOT_BUTTON) == LOW) {
-      sendData.frequency = 1000;  // Master mengirim 1kHz
+      sendData.frequency = 1000;  // Master mengirim 1kHz ke Slave
       esp_now_send(peerAddress, (uint8_t*)&sendData, sizeof(sendData));
       Serial.println("Sent 1kHz to Slave");
       readyToSend = false;      // Nonaktifkan pengiriman lebih lanjut
